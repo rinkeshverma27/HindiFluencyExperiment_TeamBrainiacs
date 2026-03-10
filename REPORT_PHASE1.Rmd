@@ -1,0 +1,327 @@
+---
+title: "REPORT_PHASE1 -- Semantic Fluency & Mental Lexicon"
+author: "Yogendra Patel"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    fig_width: 9
+    fig_height: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.align = "center")
+```
+
+```{r load-and-prep, message=FALSE, warning=FALSE}
+# -- Libraries ------------------------------------------------------------------
+library(dplyr)
+library(readr)
+library(stringr)
+library(ggplot2)
+library(patchwork)
+library(scales)
+library(tidyr)
+
+# -- Load Data ------------------------------------------------------------------
+df_raw <- read_csv("final_dataset.csv")
+
+# -- Filters & Feature Engineering ---------------------------------------------
+df <- df_raw %>%
+  mutate(
+    state_ut = str_trim(state_ut),
+    language  = str_to_lower(str_trim(language))
+  ) %>%
+  # Remove English-only words (keep hindi / hinglish)
+  filter(language != "english") %>%
+  mutate(
+    Native_Status = ifelse(
+      state_ut %in% c("Kerala", "Telangana", "Andhra Pradesh"),
+      "Non-Native", "Native"
+    ),
+    # Factor with consistent level order
+    Native_Status = factor(Native_Status, levels = c("Native", "Non-Native"))
+  ) %>%
+  group_by(subject_id, domain) %>%
+  mutate(
+    tag          = row_number(),
+    IRT_ms       = latency_ms,
+    rt           = cumsum(latency_ms),
+    Prev_X       = lag(x_norm),
+    Prev_Y       = lag(y_norm),
+    Seq_Distance = sqrt((x_norm - Prev_X)^2 + (y_norm - Prev_Y)^2)
+  ) %>%
+  ungroup()
+
+# Shared colour palette (colour-blind friendly)
+pal <- c("Native" = "#2196F3", "Non-Native" = "#F44336")
+```
+
+---
+
+# H1 . Lexical Productivity & Access Speed
+
+**Hypothesis:** Native Hindi speakers produce more unique words *and* retrieve them
+faster (shorter IRT) than Non-Native speakers.
+
+*Rationale:* A well-practised mental lexicon has denser, more inter-connected
+nodes, making both quantity and speed superior for native users.
+
+```{r h1-combined, fig.height=5, fig.width=10}
+h1_data <- df %>%
+  group_by(subject_id, Native_Status) %>%
+  summarise(
+    Unique_Words = n_distinct(word),
+    Mean_IRT_s   = mean(IRT_ms, na.rm = TRUE) / 1000,   # convert to seconds
+    .groups = "drop"
+  )
+
+# -- Panel A: Unique words ------------------------------------------------------
+p1a <- ggplot(h1_data, aes(x = Native_Status, y = Unique_Words, fill = Native_Status)) +
+  geom_violin(alpha = 0.35, trim = FALSE) +
+  geom_boxplot(width = 0.25, outlier.shape = NA, alpha = 0.85) +
+  geom_jitter(width = 0.1, size = 1.6, alpha = 0.55, colour = "grey30") +
+  scale_fill_manual(values = pal) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none",
+        plot.title = element_text(face = "bold")) +
+  labs(title = "A  Total Unique Words",
+       y = "Unique Words Generated", x = NULL)
+
+# -- Panel B: Mean IRT (seconds) -----------------------------------------------
+p1b <- ggplot(h1_data, aes(x = Native_Status, y = Mean_IRT_s, fill = Native_Status)) +
+  geom_violin(alpha = 0.35, trim = FALSE) +
+  geom_boxplot(width = 0.25, outlier.shape = NA, alpha = 0.85) +
+  geom_jitter(width = 0.1, size = 1.6, alpha = 0.55, colour = "grey30") +
+  scale_fill_manual(values = pal) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none",
+        plot.title = element_text(face = "bold")) +
+  labs(title = "B  Mean Inter-Response Time",
+       y = "Mean IRT (seconds)", x = NULL)
+
+# -- Panel C: Scatter -- are productivity & speed correlated? -------------------
+p1c <- ggplot(h1_data, aes(x = Unique_Words, y = Mean_IRT_s,
+                            colour = Native_Status, shape = Native_Status)) +
+  geom_point(size = 2.5, alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE, linewidth = 1) +
+  scale_colour_manual(values = pal) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom",
+        plot.title = element_text(face = "bold")) +
+  labs(title = "C  Productivity vs. Speed (per participant)",
+       x = "Unique Words", y = "Mean IRT (s)",
+       colour = NULL, shape = NULL)
+
+(p1a | p1b) / p1c +
+  plot_annotation(
+    title = "H1 . Lexical Productivity & Access Speed",
+    theme = theme(plot.title = element_text(face = "bold", size = 14))
+  )
+```
+
+### Observations
+
+- **Panel A (Unique Words):** Compare the median line inside each box. If the
+  Native median sits higher, Native speakers generate a larger vocabulary during
+  the task, consistent with a richer, more accessible mental lexicon.
+
+- **Panel B (Mean IRT):** A *lower* median for Native speakers indicates faster
+  word retrieval -- they spend less time "searching" between productions.
+
+- **Panel C (Scatter):** The regression lines reveal whether higher productivity
+  co-occurs with faster retrieval. A downward slope (more words -> lower IRT)
+  suggests fluency drives both simultaneously. Divergent slopes between groups
+  would indicate the two metrics are *decoupled* for Non-Natives -- they may
+  produce similar counts but with greater effort.
+
+---
+
+# H2 . Within-Cluster Spatial Density by Domain
+
+**Hypothesis:** Native speakers will place words from the same semantic category
+closer together (tighter clusters, lower spatial variance) than Non-Native
+speakers, reflecting a more organised mental map.
+
+```{r h2-plot, fig.height=6, fig.width=10}
+h2_data <- df %>%
+  group_by(subject_id, domain, Native_Status) %>%
+  summarise(
+    Spatial_Var = var(x_norm, na.rm = TRUE) + var(y_norm, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(Spatial_Var)) %>%
+  mutate(domain = str_to_title(str_replace_all(domain, "-", " ")))
+
+ggplot(h2_data, aes(x = Native_Status, y = Spatial_Var, fill = Native_Status)) +
+  geom_violin(alpha = 0.40, trim = FALSE) +
+  geom_boxplot(width = 0.22, outlier.shape = NA, alpha = 0.85) +
+  geom_jitter(width = 0.12, size = 1.3, alpha = 0.4, colour = "grey30") +
+  facet_wrap(~ domain, nrow = 1) +
+  scale_fill_manual(values = pal) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold"),
+    axis.text.x = element_text(angle = 20, hjust = 1)
+  ) +
+  labs(
+    title = "H2 . Within-Cluster Spatial Density by Domain",
+    subtitle = "Lower variance = words placed closer together = tighter semantic organisation",
+    y = "Spatial Variance (x + y)", x = NULL
+  )
+```
+
+### Observations
+
+- Each panel represents one semantic domain. **Violin width near the bottom** of
+  the y-axis (low variance) indicates most participants in that group cluster
+  their words tightly.
+
+- Domains like *Furniture* or *Animals* are cognitively richer and may amplify
+  differences: Native speakers tend to have a stable, spatially compact schema
+  for such categories.
+
+- If Non-Native violins stretch further upward than Native violins within the
+  same panel, it confirms that Non-Native mental maps are more spatially
+  dispersed -- words are "scattered" rather than grouped.
+
+- *Body Parts* and *Colours* are typically concrete and universal; expect smaller
+  group differences there compared to abstract/culturally-loaded domains.
+
+---
+
+# H3 . Semantic Switching Frequency
+
+**Hypothesis:** Non-Native speakers will show a higher *switch rate* -- more
+pauses > 2 s -- as they struggle to navigate between semantic patches.
+
+```{r h3-plot, fig.height=5, fig.width=9}
+h3_data <- df %>%
+  filter(!is.na(IRT_ms) & tag > 1) %>%
+  group_by(subject_id, Native_Status) %>%
+  summarise(
+    Total_Words  = n(),
+    Switch_Count = sum(IRT_ms > 2000),
+    Switch_Rate  = Switch_Count / Total_Words,
+    .groups = "drop"
+  )
+
+p3a <- ggplot(h3_data, aes(x = Native_Status, y = Switch_Rate, fill = Native_Status)) +
+  geom_violin(alpha = 0.35, trim = FALSE) +
+  geom_boxplot(width = 0.25, outlier.shape = NA, alpha = 0.85) +
+  geom_jitter(width = 0.1, size = 1.8, alpha = 0.55, colour = "grey30") +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  scale_fill_manual(values = pal) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none") +
+  labs(title = "A  Switch Rate by Group",
+       y = "Switch Rate (% of words > 2 s pause)", x = NULL)
+
+# Mean switch rate per domain
+h3_domain <- df %>%
+  filter(!is.na(IRT_ms) & tag > 1) %>%
+  mutate(domain = str_to_title(str_replace_all(domain, "-", " "))) %>%
+  group_by(domain, Native_Status) %>%
+  summarise(
+    Switch_Rate = mean(IRT_ms > 2000, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+p3b <- ggplot(h3_domain, aes(x = domain, y = Switch_Rate, fill = Native_Status)) +
+  geom_col(position = "dodge", alpha = 0.85) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  scale_fill_manual(values = pal) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 25, hjust = 1),
+        legend.position = "bottom") +
+  labs(title = "B  Switch Rate by Domain",
+       y = "Mean Switch Rate", x = NULL, fill = NULL)
+
+p3a | p3b +
+  plot_annotation(
+    title = "H3 . Semantic Switching Frequency",
+    theme = theme(plot.title = element_text(face = "bold", size = 14))
+  )
+```
+
+### Observations
+
+- **Panel A:** A higher boxplot for Non-Natives confirms they hit dead ends more
+  frequently -- their semantic patches are smaller or less richly connected.
+
+- **Panel B:** The grouped bar chart reveals *which domains* cause the most
+  switching effort. Abstract or culturally-embedded categories (e.g., Furniture)
+  likely show the largest Native vs. Non-Native gap, while universal categories
+  like Body Parts may be more equal.
+
+- If the gap in Panel B is large for *Foods*, it may reflect the cultural
+  specificity of the Hindi-speaking food lexicon -- Non-Natives from South India
+  may not have the same Hindi food vocabulary.
+
+---
+
+# H4 . Prototypicality Bias & Recall Order
+
+**Hypothesis:** Native speakers will place early (prototypical) words closer to
+the *spatial centroid* of their map, and this advantage diminishes as recall order
+increases.
+
+```{r h4-plot, fig.height=5, fig.width=10}
+h4_data <- df %>%
+  group_by(subject_id, domain) %>%
+  mutate(
+    Centroid_X      = mean(x_norm, na.rm = TRUE),
+    Centroid_Y      = mean(y_norm, na.rm = TRUE),
+    Dist_to_Centroid = sqrt((x_norm - Centroid_X)^2 + (y_norm - Centroid_Y)^2)
+  ) %>%
+  ungroup() %>%
+  filter(tag <= 20)
+
+p4a <- ggplot(h4_data, aes(x = tag, y = Dist_to_Centroid, colour = Native_Status)) +
+  geom_smooth(method = "loess", se = TRUE, linewidth = 1.3) +
+  scale_colour_manual(values = pal) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom") +
+  labs(title = "A  Distance to Centroid over Recall Order",
+       x = "Recall Order (Word #)", y = "Distance to Centroid",
+       colour = NULL)
+
+# Box of early vs late words
+h4_earlyLate <- h4_data %>%
+  mutate(Phase = ifelse(tag <= 5, "Early (1-5)", "Later (6-20)"))
+
+p4b <- ggplot(h4_earlyLate, aes(x = Phase, y = Dist_to_Centroid, fill = Native_Status)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.8) +
+  scale_fill_manual(values = pal) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom") +
+  labs(title = "B  Early vs. Later Words",
+       x = NULL, y = "Distance to Centroid", fill = NULL)
+
+p4a | p4b +
+  plot_annotation(
+    title = "H4 . Prototypicality Bias",
+    theme = theme(plot.title = element_text(face = "bold", size = 14))
+  )
+```
+
+### Observations
+
+- **Panel A (LOESS curve):** If the Native line *starts lower* at tag = 1 and
+  stays closer to zero for the first 5 words, it confirms that Native speakers
+  anchor prototypical items (e.g., "cow" for animals) right at the spatial
+  core of their map.
+
+- Over time, both lines should rise as later-retrieved words occupy peripheral
+  positions. A steeper rise for Non-Natives would mean their maps lose
+  centripetal organisation faster.
+
+- **Panel B:** The "Early (1-5)" box for Natives should sit measurably lower
+  than Non-Natives, whereas the "Later (6-20)" gap may shrink -- confirming
+  the effect is strongest for *prototypical* words.
+
+---
