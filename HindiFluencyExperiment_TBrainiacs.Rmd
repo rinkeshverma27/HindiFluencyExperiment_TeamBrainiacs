@@ -1,0 +1,331 @@
+---
+title: "REPORT_PHASE1 -- Semantic Fluency & Mental Lexicon"
+author: "Brainiacs"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    fig_width: 7
+    fig_height: 4
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.align = "center")
+```
+
+```{r load-and-prep, message=FALSE, warning=FALSE}
+# -- Libraries ------------------------------------------------------------------
+library(dplyr)
+library(readr)
+library(stringr)
+library(ggplot2)
+library(scales)
+library(tidyr)
+
+# -- Load Data ------------------------------------------------------------------
+df_raw <- read_csv("final_dataset.csv")
+
+# -- Filters & Feature Engineering ---------------------------------------------
+df <- df_raw %>%
+  mutate(
+    state_ut = str_trim(state_ut),
+    language  = str_to_lower(str_trim(language))
+  ) %>%
+  filter(language != "english") %>%
+  mutate(
+    Native_Status = ifelse(
+      state_ut %in% c("Kerala", "Telangana", "Andhra Pradesh"),
+      "Non-Native", "Native"
+    ),
+    Native_Status = factor(Native_Status, levels = c("Native", "Non-Native"))
+  ) %>%
+  group_by(subject_id, domain) %>%
+  mutate(
+    tag          = row_number(),
+    IRT_ms       = latency_ms,
+    rt           = cumsum(latency_ms),
+    Prev_X       = lag(x_norm),
+    Prev_Y       = lag(y_norm),
+    Seq_Distance = sqrt((x_norm - Prev_X)^2 + (y_norm - Prev_Y)^2)
+  ) %>%
+  ungroup()
+
+# Shared colour palette (colour-blind friendly)
+pal <- c("Native" = "#2196F3", "Non-Native" = "#F44336")
+```
+
+------------------------------------------------------------------------
+
+# H1 . Lexical Productivity & Access Speed
+
+**Hypothesis:** Native Hindi speakers produce more unique words *and*
+retrieve them faster (shorter IRT) than Non-Native speakers.
+
+*Rationale:* A well-practised mental lexicon has denser, more
+inter-connected nodes, making both quantity and speed superior for
+native users.
+
+```{r h1-data}
+h1_data <- df %>%
+  group_by(subject_id, Native_Status) %>%
+  summarise(
+    Unique_Words = n_distinct(word),
+    Mean_IRT_s   = mean(IRT_ms, na.rm = TRUE) / 1000,
+    .groups = "drop"
+  )
+```
+
+```{r h1-plot-a, fig.width=6, fig.height=4}
+ggplot(h1_data, aes(x = Native_Status, y = Unique_Words, fill = Native_Status)) +
+  geom_violin(alpha = 0.35, trim = FALSE) +
+  geom_boxplot(width = 0.25, outlier.shape = NA, alpha = 0.85) +
+  geom_jitter(width = 0.1, size = 1.6, alpha = 0.55, colour = "grey30") +
+  scale_fill_manual(values = pal) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none") +
+  labs(title = "H1A -- Total Unique Words per Participant",
+       y = "Unique Words Generated", x = NULL)
+```
+
+```{r h1-plot-b, fig.width=6, fig.height=4}
+ggplot(h1_data, aes(x = Native_Status, y = Mean_IRT_s, fill = Native_Status)) +
+  geom_violin(alpha = 0.35, trim = FALSE) +
+  geom_boxplot(width = 0.25, outlier.shape = NA, alpha = 0.85) +
+  geom_jitter(width = 0.1, size = 1.6, alpha = 0.55, colour = "grey30") +
+  scale_fill_manual(values = pal) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none") +
+  labs(title = "H1B -- Mean Inter-Response Time",
+       y = "Mean IRT (seconds)", x = NULL)
+```
+
+```{r h1-plot-c, fig.width=7, fig.height=4}
+ggplot(h1_data, aes(x = Unique_Words, y = Mean_IRT_s,
+                    colour = Native_Status, shape = Native_Status)) +
+  geom_point(size = 2.5, alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE, linewidth = 1) +
+  scale_colour_manual(values = pal) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom") +
+  labs(title = "H1C -- Productivity vs. Speed (per participant)",
+       x = "Unique Words", y = "Mean IRT (s)",
+       colour = NULL, shape = NULL)
+```
+
+### Observations
+
+
+# H5 . Repeat / Intrusion Rate
+
+**Hypothesis:** Non-Native speakers will show a higher rate of word
+repetitions due to weaker lexical monitoring.
+
+```{r h5-data}
+h5_data <- df %>%
+  group_by(subject_id, Native_Status) %>%
+  summarise(
+    Total_Words  = n(),
+    Unique_Words = n_distinct(word),
+    Repeat_Rate  = (Total_Words - Unique_Words) / Total_Words,
+    .groups = "drop"
+  )
+```
+
+```{r h5-plot-a, fig.width=6, fig.height=4}
+ggplot(h5_data, aes(x = Native_Status, y = Repeat_Rate, fill = Native_Status)) +
+  geom_violin(alpha = 0.35, trim = FALSE) +
+  geom_boxplot(width = 0.25, outlier.shape = NA, alpha = 0.85) +
+  geom_jitter(width = 0.1, size = 1.8, alpha = 0.55, colour = "grey30") +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  scale_fill_manual(values = pal) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none") +
+  labs(title = "H5A -- Repeat Rate by Group",
+       y = "% Words Repeated", x = NULL)
+```
+
+```{r h5-plot-b, fig.width=7, fig.height=4}
+ggplot(h5_data, aes(x = Unique_Words, y = Repeat_Rate,
+                    colour = Native_Status, shape = Native_Status)) +
+  geom_point(size = 2.5, alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE, linewidth = 1) +
+  scale_colour_manual(values = pal) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom") +
+  labs(title = "H5B -- Repeat Rate vs. Productivity",
+       x = "Unique Words", y = "Repeat Rate (%)",
+       colour = NULL, shape = NULL)
+```
+
+### Observations
+
+-   **H5A:** A higher box for Non-Natives confirms weaker inhibitory
+    control -- they re-enter already-produced words more often.
+
+-   **H5B:** If both groups show a negative relationship (more words -\>
+    fewer repeats), that is expected. A flat or positive slope for
+    Non-Natives would indicate poor lexical self-monitoring even among
+    productive speakers.
+
+------------------------------------------------------------------------
+
+# H6 . Domain-Specific Cognitive Load
+
+**Hypothesis:** The IRT gap between groups will be *largest* for
+abstract or culturally embedded domains (e.g., Furniture) and smallest
+for universal, embodied categories (Body Parts).
+
+```{r h6-data}
+h6_data <- df %>%
+  mutate(IRT_s  = IRT_ms / 1000,
+         domain = str_to_title(str_replace_all(domain, "-", " ")))
+
+h6_mean <- h6_data %>%
+  group_by(domain, Native_Status) %>%
+  summarise(Mean_IRT_s = mean(IRT_s, na.rm = TRUE), .groups = "drop")
+```
+
+```{r h6-plot-a, fig.width=8, fig.height=4}
+ggplot(h6_data, aes(x = domain, y = IRT_s, fill = Native_Status)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.75) +
+  coord_cartesian(ylim = c(0, 15)) +
+  scale_fill_manual(values = pal) +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x = element_text(angle = 25, hjust = 1),
+        legend.position = "bottom") +
+  labs(title = "H6A -- IRT Distribution by Domain",
+       y = "IRT (seconds)", x = NULL, fill = NULL)
+```
+
+```{r h6-plot-b, fig.width=6, fig.height=4}
+ggplot(h6_mean, aes(x = Native_Status, y = domain, fill = Mean_IRT_s)) +
+  geom_tile(colour = "white", linewidth = 0.8) +
+  geom_text(aes(label = round(Mean_IRT_s, 1)), size = 3.8, fontface = "bold") +
+  scale_fill_gradient(low = "#E3F2FD", high = "#B71C1C",
+                      name = "Mean IRT (s)") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.y = element_text(face = "bold")) +
+  labs(title = "H6B -- Mean IRT Heatmap",
+       x = NULL, y = NULL)
+```
+
+### Observations
+
+-   **H6A (Boxplots):** The vertical gap between box medians for each
+    domain is the direct measure of additional cognitive load for
+    Non-Natives.
+
+-   **H6B (Heatmap):** Darker cells = higher mean IRT = harder domain.
+    If Non-Native cells are consistently darker, the group difference is
+    robust across domains.
+
+------------------------------------------------------------------------
+
+# H7 . Distance-Time Coupling
+
+**Hypothesis:** For Native speakers, larger spatial jumps will *predict*
+longer IRTs. Non-Natives will show a *weaker or decoupled* relationship.
+
+```{r h7-plot, fig.width=9, fig.height=4}
+h7_sub <- df %>%
+  filter(!is.na(Seq_Distance), !is.na(IRT_ms)) %>%
+  mutate(IRT_s = IRT_ms / 1000)
+
+ggplot(h7_sub, aes(x = Seq_Distance, y = IRT_s, colour = Native_Status)) +
+  geom_point(alpha = 0.12, size = 1.2) +
+  geom_smooth(method = "lm", se = TRUE, linewidth = 1.5) +
+  coord_cartesian(ylim = c(0, 20)) +
+  scale_colour_manual(values = pal) +
+  facet_wrap(~ str_to_title(str_replace_all(domain, "-", " ")), nrow = 1) +
+  theme_minimal(base_size = 10) +
+  theme(legend.position = "bottom",
+        strip.text = element_text(face = "bold")) +
+  labs(
+    title = "H7 -- Spatial Distance-Time Coupling by Domain",
+    subtitle = "Steeper slope = tighter link between space and retrieval time",
+    x = "Sequential Spatial Distance", y = "IRT (seconds)", colour = NULL
+  )
+```
+
+### Observations
+
+-   A **steeper positive slope** for Native speakers means space and
+    time are yoked -- evidence of coherent spatial encoding.
+
+-   A **flat or near-zero slope** for Non-Natives indicates decoupling:
+    spatial placements are not driven by retrieval order.
+
+-   Domains like *Animals* (larger vocabulary) should show the strongest
+    coupling; Furniture Practice may show flat slopes for both groups.
+
+------------------------------------------------------------------------
+
+# H8 . Boundary Effect -- The Exit Pause
+
+**Hypothesis:** The IRT immediately *before* a large spatial jump will
+be significantly longer than IRTs within a cluster, reflecting the
+cognitive cost of switching mental patches.
+
+```{r h8-data}
+h8_data <- df %>%
+  filter(!is.na(Seq_Distance), tag > 1) %>%
+  mutate(
+    Movement_Type = ifelse(Seq_Distance > 0.4,
+                           "Cluster Switch (Large Jump)",
+                           "Within-Cluster (Small Jump)"),
+    IRT_s = IRT_ms / 1000
+  )
+
+h8_prop <- df %>%
+  filter(!is.na(Seq_Distance), tag > 1) %>%
+  group_by(subject_id, Native_Status) %>%
+  summarise(
+    Big_Jump_Prop = mean(Seq_Distance > 0.4, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r h8-plot-a, fig.width=7, fig.height=4}
+ggplot(h8_data, aes(x = Movement_Type, y = IRT_s, fill = Native_Status)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.8) +
+  coord_cartesian(ylim = c(0, 15)) +
+  scale_fill_manual(values = pal) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom") +
+  labs(title = "H8A -- Exit Pause by Movement Type",
+       x = NULL, y = "IRT (s)", fill = NULL)
+```
+
+```{r h8-plot-b, fig.width=6, fig.height=4}
+ggplot(h8_prop, aes(x = Native_Status, y = Big_Jump_Prop, fill = Native_Status)) +
+  geom_violin(alpha = 0.35, trim = FALSE) +
+  geom_boxplot(width = 0.25, outlier.shape = NA, alpha = 0.85) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  scale_fill_manual(values = pal) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none") +
+  labs(title = "H8B -- Proportion of Large Spatial Jumps",
+       x = NULL, y = "% Large Spatial Jumps")
+```
+
+### Observations
+
+-   **H8A:** Cluster Switch boxes should sit higher than Within-Cluster
+    boxes for both groups. The key comparison is how large this gap is
+    for Natives vs. Non-Natives.
+
+-   If Natives show a bigger pause before switching, they are more aware
+    of cluster boundaries. Smaller or equal pauses for Non-Natives
+    suggest their switches are less deliberate.
+
+-   **H8B:** A higher proportion of big jumps for Non-Natives indicates
+    a more fragmented, less locally clustered spatial strategy.
+
+------------------------------------------------------------------------
